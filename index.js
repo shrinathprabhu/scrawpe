@@ -3,7 +3,6 @@ let StealthPlugin = require("puppeteer-extra-plugin-stealth");
 let cheerio = require("cheerio");
 
 class Scrawpe {
-  #html;
   constructor() {}
 
   /**
@@ -79,12 +78,12 @@ class Scrawpe {
     } else if (options.durationToWaitFor) {
       await page.waitForTimeout(options.durationToWaitFor);
     }
-    this.#html = await page.content();
+    let html = await page.content();
     console.log("Content fetched. Closing browser");
     await page.close();
     await browser.close();
     return {
-      html: this.#html,
+      html,
       scrape,
     };
   }
