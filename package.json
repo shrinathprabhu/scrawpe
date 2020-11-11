@@ -1,7 +1,7 @@
 {
-  "name": "crawler",
+  "name": "scrawpe",
   "version": "1.0.0",
-  "description": "",
+  "description": "Simple apis for crawling and scraping the web",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
