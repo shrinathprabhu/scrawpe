@@ -1,32 +1,34 @@
 let puppeteer = require("puppeteer");
 let StealthPlugin = require("puppeteer-extra-plugin-stealth");
 let cheerio = require("cheerio");
+const chalk = require("chalk");
 
 class Scrawpe {
   constructor() {}
 
   /**
+   * @param {String | URL} url URL to be crawled (FQDN)
    * @param {{
-   * stealthMode?: Boolean,
-   * url: String | URL,
-   * plugin?: 'chrome' | 'firefox',
-   * durationToWaitFor?: Number,
-   * pipe?: Boolean,
-   * slowMo?: Number,
-   * viewport?: {width?: Number, height?: Number, isMobile?: Boolean, hasTouch?: Boolean, isLandscape?: Boolean, deviceScaleFactor?: Number},
    * browserdump?: Boolean,
+   * durationToWaitFor?: Number,
+   * forScraping?: Boolean,
    * headful?: Boolean,
-   * userDataDirectoryPath?: String,
    * incognito?: Boolean,
-   * userAgent?: String,
+   * pageAuthentication?: {username: String, password: String},
+   * pipe?: Boolean,
+   * plugin?: 'chrome' | 'firefox',
    * selectorToWaitFor?: String,
-   * pageAuthentication?: {username: String, password: String}
+   * slowMo?: Number,
+   * stealthMode?: Boolean,
+   * userAgent?: String,
+   * userDataDirectoryPath?: String,
+   * viewport?: {width?: Number, height?: Number, isMobile?: Boolean, hasTouch?: Boolean, isLandscape?: Boolean, deviceScaleFactor?: Number},
    * }} options
-   * @returns {Promise<Scrawpe>}
+   * @returns {Promise<Scrape | string>}
    */
-  async crawl(options = {}) {
-    if (!options.url || !options.url.trim()) {
-      throw new Error("Url is required");
+  async crawl(url, options = {}) {
+    if (!url || !url.trim()) {
+      throw new Error(chalk.redBright("Url is required"));
     }
     let crawler = puppeteer;
     if (BooleanCheck(options.stealthMode)) {
@@ -56,36 +58,72 @@ class Scrawpe {
     if (options.userDataDirectoryPath) {
       launchOptions.userDataDir = options.userDataDirectoryPath;
     }
+    launchOptions.timeout = 90000;
     launchOptions.handleSIGHUP = true;
     launchOptions.handleSIGINT = true;
     launchOptions.handleSIGTERM = true;
-    console.debug("Launching crawler");
+    console.debug(chalk.blueBright("Launching crawler..."));
     let browser = await crawler.launch(launchOptions);
-    console.debug("Crawler launched");
-    console.debug("Visiting the page", options.url);
-    if (BooleanCheck(options.incognito)) {
-      browser = browser.createIncognitoBrowserContext();
+    try {
+      console.debug(chalk.greenBright("Crawler launched"));
+      if (BooleanCheck(options.incognito)) {
+        console.debug(chalk.blueBright("Setting incognito mode..."));
+        browser = browser.createIncognitoBrowserContext();
+        console.debug(
+          chalk.greenBright("Page will now open in incognito mode")
+        );
+      }
+      console.debug(chalk.blueBright("Visiting the page", url));
+      let page = await browser.newPage();
+      try {
+        if (options.pageAuthentication) {
+          console.debug(
+            chalk.yellowBright("Adding authentication before loading...")
+          );
+          await page.authenticate(options.pageAuthentication);
+        }
+        console.debug(chalk.yellowBright("Page is loading..."));
+        await page.goto(url, {
+          waitUntil: "networkidle0",
+          timeout: 90000,
+        });
+        console.debug(chalk.cyanBright("Initial page loaded"));
+        // FIXME improve scrolling logic for infinite loading pages
+        console.debug(chalk.blueBright("Attempting to scroll once..."));
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
+        console.debug(chalk.yellowBright("Waiting for 3 more seconds"));
+        await page.waitForTimeout(3000);
+        if (options.selectorToWaitFor) {
+          console.debug(
+            chalk.magentaBright(
+              "Waiting for user specified selector to load..."
+            )
+          );
+          await page.waitForSelector(options.selectorToWaitFor);
+        } else if (options.durationToWaitFor) {
+          console.debug(
+            chalk.magentaBright("Waiting for user specified duration...")
+          );
+          await page.waitForTimeout(options.durationToWaitFor);
+        }
+        let html = await page.content();
+        console.log(chalk.greenBright("Content fetched. Closing browser"));
+        await page.close();
+        await browser.close();
+        if (BooleanCheck(options.forScraping)) {
+          return new Scrape(html);
+        } else {
+          return html;
+        }
+      } catch (e) {
+        await page.close();
+        await browser.close();
+        throw e;
+      }
+    } catch (e) {
+      await browser.close();
+      throw e;
     }
-    let page = await browser.newPage();
-    await page.goto(options.url, {
-      waitUntil: "networkidle2",
-    });
-    if (options.pageAuthentication) {
-      await page.authenticate(options.pageAuthentication);
-    }
-    if (options.selectorToWaitFor) {
-      await page.waitForSelector(options.selectorToWaitFor);
-    } else if (options.durationToWaitFor) {
-      await page.waitForTimeout(options.durationToWaitFor);
-    }
-    let html = await page.content();
-    console.log("Content fetched. Closing browser");
-    await page.close();
-    await browser.close();
-    return {
-      html,
-      scrape,
-    };
   }
 
   /**
@@ -98,14 +136,47 @@ class Scrawpe {
    *
    * }} options
    */
-  scrape(options) {
-    let scraper = cheerio;
-    const root = scraper.load(this.html).root();
-  }
 }
 
 function BooleanCheck(value) {
   return value === true || value === false;
+}
+
+class Scrape {
+  #root;
+  constructor(htmlString) {
+    let scraper = cheerio;
+    this.#root = scraper.load(htmlString);
+  }
+  /**
+   * @param {String} selector CSS type or jQuery type query selectors
+   * @param {{
+   * formEl?: Boolean,
+   * html?: Boolean,
+   * attr?: String,
+   * }} options
+   * @returns {String}
+   */
+  scrape(selector, options = {}) {
+    // if (!selector) {
+    //   throw new Error(chalk.redBright("Selector is required to scrape"));
+    // }
+    if (this.#root(selector).length) {
+      if (BooleanCheck(options.formEl)) {
+        return this.#root(selector).val();
+      }
+      if (BooleanCheck(options.html)) {
+        return this.#root(selector).html();
+      }
+      if (options.attr) {
+        return this.#root(selector).attr(options.attr);
+      }
+      return this.#root(selector).text();
+    } else
+      throw new Error(
+        chalk.red("Following selector is not present in the dom")
+      );
+  }
 }
 
 module.exports = Scrawpe;
